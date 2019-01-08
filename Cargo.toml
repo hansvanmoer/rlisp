@@ -1,0 +1,7 @@
+[package]
+name = "rlisp"
+version = "0.1.0"
+authors = ["Hans Van Moer <hansvm.projects@gmail.com>"]
+edition = "2018"
+
+[dependencies]

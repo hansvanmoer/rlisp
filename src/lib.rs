@@ -1,6 +1,10 @@
 
 mod lexer;
 
+mod pos;
+
+mod parser;
+
 #[cfg(test)]
 mod tests {
     #[test]

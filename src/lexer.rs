@@ -23,6 +23,8 @@
 use std::str::Chars;
 use std::iter::Peekable;
 
+use crate::pos::Pos;
+
 ///
 /// All errors related to the lexer
 ///
@@ -197,16 +199,16 @@ impl<'a> Lexer<'a>{
     /// Returns the current position of the lexer as a (line, column) tuple
     /// Note that lines and columns start at zero.
     ///
-    pub fn pos(& self) -> (i32,i32){
-        (self.line, self.col)
+    pub fn pos(& self) -> Pos{
+        Pos::new(self.line, self.col)
     }
 
     ///
     /// Returns the position of the lexer at the start of the last attempted token as a (line, column) tuple
     /// Note that lines and columns start at zero.
     ///
-    pub fn token_pos(& self) -> (i32, i32) {
-        (self.last_line, self.last_col)
+    pub fn token_pos(& self) -> Pos {
+        Pos::new(self.last_line, self.last_col)
     }
     
     ///
@@ -241,7 +243,7 @@ impl<'a> Lexer<'a>{
     
     ///
     /// Skips whitespace
-    /// returns true if furtherr non-whitespace characters remain on the stream, false otherwise
+    /// returns true if further non-whitespace characters remain on the stream, false otherwise
     /// 
     fn skip_whitespace(&mut self) -> bool{
         loop {
@@ -610,7 +612,7 @@ mod tests{
         let mut lexer = Lexer::new("");
         assert_eq!(Token::End, lexer.lex().unwrap());
         assert_eq!(Token::End, lexer.lex().unwrap()); // lexer should continue to return 'End'
-        assert_eq!((0,0), lexer.pos());
+        assert_eq!(Pos::new(0,0), lexer.pos());
     }
 
     #[test]
@@ -621,18 +623,18 @@ mod tests{
         assert_eq!(Token::ExprEnd, lexer.lex().unwrap());
         assert_eq!(Token::ExprEnd, lexer.lex().unwrap());
         assert_eq!(Token::End, lexer.lex().unwrap());
-        assert_eq!((0,4), lexer.pos());
+        assert_eq!(Pos::new(0,4), lexer.pos());
     }
 
     #[test]
     fn whitespace_skipper(){
         let mut lexer = Lexer::new(" \t(\n   )\r");
         assert_eq!(Token::ExprStart, lexer.lex().unwrap());
-        assert_eq!((0, 3), lexer.pos());
+        assert_eq!(Pos::new(0, 3), lexer.pos());
         assert_eq!(Token::ExprEnd, lexer.lex().unwrap());
-        assert_eq!((1, 4), lexer.pos());
+        assert_eq!(Pos::new(1, 4), lexer.pos());
         assert_eq!(Token::End, lexer.lex().unwrap());
-        assert_eq!((2, 0), lexer.pos());
+        assert_eq!(Pos::new(2, 0), lexer.pos());
     }
 
     #[test]
@@ -812,7 +814,7 @@ mod tests{
     #[test]
     fn comments(){
         let mut lexer = Lexer::new(";comment \n(;;second comment\n test;third comment;;\n3.12;last comment\r");
-        assert_eq!((0,0), lexer.token_pos());
+        assert_eq!(Pos::new(0,0), lexer.token_pos());
         assert_eq!(Token::ExprStart, lexer.lex().unwrap());
         assert_eq!(Token::Ident(String::from("test")), lexer.lex().unwrap());
         assert_eq!(Token::Number(3.12), lexer.lex().unwrap());
@@ -831,17 +833,17 @@ mod tests{
     #[test]
     fn token_pos(){
         let mut lexer = Lexer::new("( test\n3.12");
-        assert_eq!((0,0), lexer.token_pos());
+        assert_eq!(Pos::new(0,0), lexer.token_pos());
         assert_eq!(Token::ExprStart, lexer.lex().unwrap());
-        assert_eq!((0,0), lexer.token_pos());
+        assert_eq!(Pos::new(0,0), lexer.token_pos());
         assert_eq!(Token::Ident(String::from("test")), lexer.lex().unwrap());
-        assert_eq!((0,2), lexer.token_pos());
+        assert_eq!(Pos::new(0,2), lexer.token_pos());
         assert_eq!(Token::Number(3.12), lexer.lex().unwrap());
-        assert_eq!((1,0), lexer.token_pos());
+        assert_eq!(Pos::new(1,0), lexer.token_pos());
         assert_eq!(Token::End, lexer.lex().unwrap());
-        assert_eq!((1,0), lexer.token_pos());
+        assert_eq!(Pos::new(1,0), lexer.token_pos());
         assert_eq!(Token::End, lexer.lex().unwrap());
-        assert_eq!((1,0), lexer.token_pos());
+        assert_eq!(Pos::new(1,0), lexer.token_pos());
     }
     
 }

@@ -4,4 +4,12 @@ version = "0.1.0"
 authors = ["Hans Van Moer <hansvm.projects@gmail.com>"]
 edition = "2018"
 
+[lib]
+name="rlisp"
+path="src/lib.rs"
+
+[[bin]]
+name="rlint"
+path="src/bin.rs"
+
 [dependencies]

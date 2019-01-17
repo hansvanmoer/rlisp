@@ -33,8 +33,11 @@ pub enum Error{
     ///
     /// Wraps an error from the lexer
     ///
-    LexerError(InternalLexerError)
-    
+    LexerError(InternalLexerError),
+    ///
+    /// Unexpected end of stream
+    ///
+    BadEnd
 }
 
 ///
@@ -60,7 +63,7 @@ impl CombValue {
     ///
     /// Creates a new combination with the specified elements
     ///
-    pub fn new(elements: Vec<Node>) -> CombValue {
+   pub fn new(elements: Vec<Node>) -> CombValue {
         CombValue{elements: Box::new(elements)}
     }
     
@@ -117,7 +120,7 @@ pub enum Node{
     ///
     /// An identifier
     ///
-    Identifier(String),
+    Ident(String),
     
     ///
     /// A combination
@@ -139,8 +142,7 @@ pub enum Node{
 /// The parser
 ///
 pub struct Parser<'a>{
-    lexer: Lexer<'a>,
-    pos: Pos
+    lexer: Lexer<'a>
 }
 
 impl<'a> Parser<'a> {
@@ -149,7 +151,17 @@ impl<'a> Parser<'a> {
     /// Creates a new parser with the specified slice
     ///
     pub fn new(data: &'a str) -> Parser<'a> {
-        Parser{lexer: Lexer::new(data), pos: Pos::new(0,0)}
+        Parser{lexer: Lexer::new(data)}
+    }
+
+    pub fn parse(& mut self) -> Result<Node, Error> {
+        Ok(Node::Ident(String::from("test")))
+    }
+
+    fn parse_expr(& mut self) -> Result<Node, Error> {
+        match self.lexer.lex() {
+            Token::End => BadEnd
+        }
     }
     
 }

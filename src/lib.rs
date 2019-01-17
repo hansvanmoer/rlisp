@@ -1,9 +1,9 @@
 
-mod lexer;
+pub mod lexer;
 
-mod pos;
+pub mod pos;
 
-mod parser;
+pub mod parser;
 
 #[cfg(test)]
 mod tests {

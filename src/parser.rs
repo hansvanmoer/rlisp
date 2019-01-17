@@ -25,6 +25,11 @@ use crate::pos::Pos;
 ///
 
 ///
+/// define identifier
+///
+const DEFINE_IDENT: &str = "define";
+
+///
 /// All errors associated to the parser
 ///
 #[derive(Debug, PartialEq)]
@@ -37,7 +42,19 @@ pub enum Error{
     ///
     /// Unexpected end of stream
     ///
-    BadEnd
+    BadEnd,
+    ///
+    /// Unexpected token
+    ///
+    BadToken,
+    ///
+    /// Expected identifier, got something else
+    ///
+    BadIdent,
+    ///
+    /// Expected expression, got something else
+    ///
+    BadExpr
 }
 
 ///
@@ -45,9 +62,22 @@ pub enum Error{
 ///
 #[derive(Debug, PartialEq)]
 pub enum LiteralValue{
+    ///
+    /// Boolean
+    ///
     Boolean(bool),
+    ///
+    /// Number
+    ///
     Number(f64),
-    String(String)
+    ///
+    /// String
+    ///
+    String(String),
+    ///
+    /// Nil
+    ///
+    Nil
 }
 
 ///
@@ -139,10 +169,29 @@ pub enum Node{
 }
 
 ///
+/// Helper enum for the parse_node_or_end function
+///
+enum ParsedExpr{
+    ///
+    /// End token encountered
+    ///
+    End,
+    ///
+    /// Normal node encountered
+    ///
+    Expr(Node),
+    ///
+    /// Expression end token encountered
+    ///
+    ExprEnd
+}
+
+///
 /// The parser
 ///
 pub struct Parser<'a>{
-    lexer: Lexer<'a>
+    lexer: Lexer<'a>,
+    pos: Pos
 }
 
 impl<'a> Parser<'a> {
@@ -151,17 +200,136 @@ impl<'a> Parser<'a> {
     /// Creates a new parser with the specified slice
     ///
     pub fn new(data: &'a str) -> Parser<'a> {
-        Parser{lexer: Lexer::new(data)}
+        Parser{lexer: Lexer::new(data), pos : Pos::new(0,0)}
     }
 
+    ///
+    /// Parses a single node
+    ///
     pub fn parse(& mut self) -> Result<Node, Error> {
-        Ok(Node::Ident(String::from("test")))
-    }
-
-    fn parse_expr(& mut self) -> Result<Node, Error> {
-        match self.lexer.lex() {
-            Token::End => BadEnd
+        match self.parse_node_or_end()? {
+            ParsedExpr::End => Ok(Node::Literal(LiteralValue::Nil)),
+            ParsedExpr::Expr(node) => Ok(node),
+            ParsedExpr::ExprEnd => Err(Error::BadEnd)
         }
     }
-    
+
+    ///
+    /// Returns the position at the beginnning of the last attempted parse
+    ///
+    pub fn pos(& self) -> Pos {
+        self.pos
+    }
+
+    ///
+    /// Returns a node, an end or an expression end value
+    ///
+    fn parse_node_or_end(& mut self) -> Result<ParsedExpr, Error> {
+        self.pos = self.lexer.token_pos();
+        match self.lexer.lex() {
+            Ok(token) => {
+                match token {
+                    Token::End => Ok(ParsedExpr::End),
+                    Token::ExprStart => Ok(ParsedExpr::Expr(self.parse_comb()?)),
+                    Token::ExprEnd => Ok(ParsedExpr::ExprEnd),
+                    Token::Ident(s) => Ok(ParsedExpr::Expr(Node::Ident(s))),
+                    Token::Number(n) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Number(n)))),
+                    Token::Boolean(b) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Boolean(b)))),
+                    Token::StringLit(s) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::String(s)))),
+                    Token::Quote => Ok(ParsedExpr::Expr(self.parse_quote()?))
+                }
+            },
+            Err(e) => Err(Error::LexerError(e))
+         }
+    }
+
+    ///
+    /// Parses and returns a parsed node
+    ///
+    fn parse_node(& mut self) -> Result<Node, Error> {
+        match self.parse_node_or_end()? {
+            ParsedExpr::End => Err(Error::BadEnd),
+            ParsedExpr::Expr(node) => Ok(node),
+            ParsedExpr::ExprEnd => Err(Error::BadToken)
+        }
+    }
+
+    ///
+    /// Parses and returns an identifier
+    ///
+    fn parse_ident(& mut self) -> Result<String, Error> {
+        let node = self.parse_node()?;
+        match node {
+            Node::Ident(i) => Ok(i),
+            _ => Err(Error::BadIdent)
+        }
+    }
+
+    ///
+    /// Parses and returns an expression
+    ///
+    fn parse_expr(& mut self) -> Result<Node, Error> {
+        let node = self.parse_node()?;
+        match node {
+            Node::Define(_) => Err(Error::BadExpr),
+            _ => Ok(node)
+        }
+    }
+
+    ///
+    /// Parses and returns a combination or a define
+    ///
+    fn parse_comb(& mut self) -> Result<Node, Error> {
+        let mut elements = Vec::new();
+        match self.parse_node_or_end()? {
+            ParsedExpr::End => {
+                return Err(Error::BadEnd);
+            },
+            ParsedExpr::Expr(node) => {
+                match & node {
+                    & Node::Ident(ref i) => {
+                        if i == DEFINE_IDENT {
+                            return self.parse_define();
+                        } else {
+                            elements.push(node);
+                        }
+                    },
+                    _ => {
+                        elements.push(node);
+                    }
+                }
+            },
+            ParsedExpr::ExprEnd => {
+                return Ok(Node::Literal(LiteralValue::Nil))
+            }
+        }
+
+        loop {
+            match self.parse_node_or_end()? {
+                ParsedExpr::End => {
+                    return Err(Error::BadEnd);
+                },
+                ParsedExpr::Expr(node) => {
+                    elements.push(node);
+                },
+                ParsedExpr::ExprEnd => {
+                    return Ok(Node::Comb(CombValue::new(elements)))
+                }
+            }
+        }
+    }
+
+    ///
+    /// parses a quote
+    ///
+    fn parse_quote(& mut self) -> Result<Node, Error> {
+        Ok(Node::Quote(QuoteValue::new(self.parse_node()?)))
+    }
+
+    ///
+    /// parses a define
+    ///
+    fn parse_define(& mut self) -> Result<Node, Error> {
+        Ok(Node::Define(DefineValue::new(self.parse_ident()?, self.parse_expr()?)))
+    }
 }

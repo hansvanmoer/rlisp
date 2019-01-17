@@ -16,7 +16,7 @@
 //
 
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Pos{
     pub line: i32,
     pub col: i32

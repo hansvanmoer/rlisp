@@ -85,7 +85,7 @@ pub enum LiteralValue{
 ///
 #[derive(Debug, PartialEq)]
 pub struct CombValue{
-    elements: Box<Vec<Node>>
+    pub elements: Box<Vec<Node>>
 }
 
 impl CombValue {
@@ -93,10 +93,10 @@ impl CombValue {
     ///
     /// Creates a new combination with the specified elements
     ///
-   pub fn new(elements: Vec<Node>) -> CombValue {
+    pub fn new(elements: Vec<Node>) -> CombValue {
         CombValue{elements: Box::new(elements)}
     }
-    
+
 }
 
 ///
@@ -119,22 +119,56 @@ impl QuoteValue{
 }
 
 ///
+/// A representation of a value define expression
+///
+#[derive(Debug, PartialEq)] 
+pub struct ValueExpr{
+    pub expr: Box<Node>
+}
+
+///
+/// A representation of a procedure define expression
+///
+#[derive(Debug, PartialEq)] 
+struct ProcExpr{
+    pub params: Vec<String>, 
+    pub expr: Box<Node>
+}
+
+///
+/// a representation of a define expression
+///
+#[derive(Debug, PartialEq)] 
+enum DefineExpr{
+    Simple(ValueExpr),
+    Proc(ProcExpr)
+}
+
+///
 /// a representation of a define form
 ///
 #[derive(Debug, PartialEq)] 
 pub struct DefineValue{
     name: String,
-    value: Box<Node>
+    expr: DefineExpr
 }
 
 impl DefineValue {
 
     ///
-    /// Creates a new define form
+    /// Creates a new simple define form
     ///
-    pub fn new(name: String, value: Node) -> DefineValue{
-        DefineValue{name, value: Box::new(value)}
+    pub fn new_value(name: String, expr: Node) -> DefineValue{
+        DefineValue{name, expr: DefineExpr::Simple(ValueExpr{expr: Box::new(expr)})}
     }
+
+    ///
+    /// Creates a new procedure define form
+    ///
+    pub fn new_proc(name: String, params: Vec<String>, expr: Node) -> DefineValue {
+        DefineValue{name, expr: DefineExpr::Proc(ProcExpr{params, expr: Box::new(expr)})}
+    }
+
 }
 
 /// 
@@ -145,27 +179,27 @@ pub enum Node{
     ///
     /// A literal
     ///
-    Literal(LiteralValue),
+    Literal(LiteralValue, Pos),
 
     ///
     /// An identifier
     ///
-    Ident(String),
+    Ident(String, Pos),
     
     ///
     /// A combination
     ///
-    Comb(CombValue),
+    Comb(CombValue, Pos),
 
     ///
     /// A quote
     ///
-    Quote(QuoteValue),
+    Quote(QuoteValue, Pos),
 
     ///
     /// Define form
     ///
-    Define(DefineValue)
+    Define(DefineValue, Pos)
 }
 
 ///
@@ -208,7 +242,7 @@ impl<'a> Parser<'a> {
     ///
     pub fn parse(& mut self) -> Result<Node, Error> {
         match self.parse_node_or_end()? {
-            ParsedExpr::End => Ok(Node::Literal(LiteralValue::Nil)),
+            ParsedExpr::End => Ok(Node::Literal(LiteralValue::Nil, self.pos)),
             ParsedExpr::Expr(node) => Ok(node),
             ParsedExpr::ExprEnd => Err(Error::BadEnd)
         }
@@ -221,21 +255,26 @@ impl<'a> Parser<'a> {
         self.pos
     }
 
+    fn lex(& mut self) -> Result<Token, InternalLexerError> {
+        let token = self.lexer.lex();
+        self.pos = self.lexer.token_pos();
+        token
+    }
+    
     ///
     /// Returns a node, an end or an expression end value
     ///
     fn parse_node_or_end(& mut self) -> Result<ParsedExpr, Error> {
-        self.pos = self.lexer.token_pos();
-        match self.lexer.lex() {
+        match self.lex() {
             Ok(token) => {
                 match token {
                     Token::End => Ok(ParsedExpr::End),
                     Token::ExprStart => Ok(ParsedExpr::Expr(self.parse_comb()?)),
                     Token::ExprEnd => Ok(ParsedExpr::ExprEnd),
-                    Token::Ident(s) => Ok(ParsedExpr::Expr(Node::Ident(s))),
-                    Token::Number(n) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Number(n)))),
-                    Token::Boolean(b) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Boolean(b)))),
-                    Token::StringLit(s) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::String(s)))),
+                    Token::Ident(s) => Ok(ParsedExpr::Expr(Node::Ident(s, self.pos))),
+                    Token::Number(n) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Number(n), self.pos))),
+                    Token::Boolean(b) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Boolean(b), self.pos))),
+                    Token::StringLit(s) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::String(s), self.pos))),
                     Token::Quote => Ok(ParsedExpr::Expr(self.parse_quote()?))
                 }
             },
@@ -255,65 +294,55 @@ impl<'a> Parser<'a> {
     }
 
     ///
-    /// Parses and returns an identifier
-    ///
-    fn parse_ident(& mut self) -> Result<String, Error> {
-        let node = self.parse_node()?;
-        match node {
-            Node::Ident(i) => Ok(i),
-            _ => Err(Error::BadIdent)
-        }
-    }
-
-    ///
     /// Parses and returns an expression
     ///
     fn parse_expr(& mut self) -> Result<Node, Error> {
         let node = self.parse_node()?;
         match node {
-            Node::Define(_) => Err(Error::BadExpr),
+            Node::Define(_, _) => Err(Error::BadExpr),
             _ => Ok(node)
         }
     }
 
-    ///
-    /// Parses and returns a combination or a define
-    ///
-    fn parse_comb(& mut self) -> Result<Node, Error> {
-        let mut elements = Vec::new();
-        match self.parse_node_or_end()? {
-            ParsedExpr::End => {
-                return Err(Error::BadEnd);
-            },
-            ParsedExpr::Expr(node) => {
-                match & node {
-                    & Node::Ident(ref i) => {
-                        if i == DEFINE_IDENT {
-                            return self.parse_define();
-                        } else {
-                            elements.push(node);
-                        }
-                    },
-                    _ => {
-                        elements.push(node);
-                    }
-                }
-            },
-            ParsedExpr::ExprEnd => {
-                return Ok(Node::Literal(LiteralValue::Nil))
-            }
-        }
-
+    fn parse_comb_tail(& mut self, node: Node, pos: Pos) -> Result<Node, Error> {
+        let mut elems = vec!(node);
         loop {
             match self.parse_node_or_end()? {
                 ParsedExpr::End => {
                     return Err(Error::BadEnd);
                 },
-                ParsedExpr::Expr(node) => {
-                    elements.push(node);
-                },
                 ParsedExpr::ExprEnd => {
-                    return Ok(Node::Comb(CombValue::new(elements)))
+                    return Ok(Node::Comb(CombValue::new(elems), pos));
+                }
+                ParsedExpr::Expr(node) => {
+                    elems.push(node);
+                }
+            };
+        }
+    }
+    
+    ///
+    /// Parses and returns a combination or a define
+    ///
+    fn parse_comb(& mut self) -> Result<Node, Error> {
+        let pos = self.pos;
+        match self.parse_node_or_end()? {
+            ParsedExpr::End => {
+                return Err(Error::BadEnd);
+            },
+            ParsedExpr::ExprEnd => {
+                return Ok(Node::Literal(LiteralValue::Nil, pos))
+            }
+            ParsedExpr::Expr(node) => {
+                match node {
+                    Node::Ident(i, ipos) => {
+                        if i == DEFINE_IDENT {
+                            self.parse_define(pos)
+                        }else{
+                            self.parse_comb_tail(Node::Ident(i, ipos), pos)
+                        }
+                    },
+                    _ => self.parse_comb_tail(node, pos)
                 }
             }
         }
@@ -323,13 +352,114 @@ impl<'a> Parser<'a> {
     /// parses a quote
     ///
     fn parse_quote(& mut self) -> Result<Node, Error> {
-        Ok(Node::Quote(QuoteValue::new(self.parse_node()?)))
+        let pos = self.pos;
+        Ok(Node::Quote(QuoteValue::new(self.parse_node()?), pos))
     }
-
+    
     ///
     /// parses a define
     ///
-    fn parse_define(& mut self) -> Result<Node, Error> {
-        Ok(Node::Define(DefineValue::new(self.parse_ident()?, self.parse_expr()?)))
+    fn parse_define(& mut self, pos: Pos) -> Result<Node, Error> {
+        match self.parse_node()? {
+            Node::Ident(ident, _) => Ok(Node::Define(DefineValue::new_value(ident, self.parse_expr()?), pos)),
+            Node::Comb(mut comb, _) => {
+                let mut param_elems = comb.elements.drain(0..);
+                let ident = match param_elems.next() {
+                    Some(n) => {
+                        match n {
+                            Node::Ident(i, _) => i,
+                            _ => {
+                                return Err(Error::BadIdent);
+                            }
+                        }
+                    },    
+                    None => {
+                        return Err(Error::BadIdent);
+                    }    
+                };
+                let mut params = Vec::new();
+                for param in param_elems {
+                    params.push( match param {
+                        Node::Ident(i, _) => i,
+                        _ => {
+                            return Err(Error::BadIdent)
+                        }
+                    });
+                }
+                Ok(Node::Define(DefineValue::new_proc(ident, params, self.parse_expr()?), pos))
+            }
+            _=> Err(Error::BadIdent)
+        }
     }
+
+}
+
+#[cfg(test)]
+mod test{
+
+    use super::*;
+    
+    #[test]
+    fn boolean_literal(){
+        let mut p = Parser::new("t");
+        assert_eq!(Node::Literal(LiteralValue::Boolean(true), Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn numeric_literal(){
+        let mut p = Parser::new("1.0");
+        assert_eq!(Node::Literal(LiteralValue::Number(1.0), Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn string_literal(){
+        let mut p = Parser::new("\"test\"");
+        assert_eq!(Node::Literal(LiteralValue::String(String::from("test")), Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn identifier(){
+        let mut p = Parser::new("test");
+        assert_eq!(Node::Ident(String::from("test"), Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn nil(){
+        let mut p = Parser::new("()");
+        assert_eq!(Node::Literal(LiteralValue::Nil, Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn comb(){
+        let mut p = Parser::new("(test 12.0 t)");
+        assert_eq!(Node::Comb(CombValue::new(
+            vec![
+                Node::Ident(String::from("test"), Pos::new(0,1)),
+                Node::Literal(LiteralValue::Number(12.0), Pos::new(0,6)),
+                Node::Literal(LiteralValue::Boolean(true), Pos::new(0,11))
+            ]
+        ), Pos::new(0,0)), p.parse().unwrap());
+    }
+
+    #[test]
+    fn define(){
+        let mut p = Parser::new("(define abc t)");
+        assert_eq!(
+            Node::Define(DefineValue::new_value(String::from("abc"),Node::Literal(LiteralValue::Boolean(true), Pos::new(0,12))), Pos::new(0,0)),
+            p.parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn bad_ident(){
+        let mut p = Parser::new("(define 12 t)");
+        assert_eq!(Error::BadIdent, p.parse().unwrap_err());
+    }
+
+    #[test]
+    fn bad_expr(){
+        let mut p = Parser::new("(define abc (define tst t))");
+        assert_eq!(Error::BadExpr, p.parse().unwrap_err());
+    }
+
 }

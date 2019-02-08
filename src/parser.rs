@@ -30,6 +30,11 @@ use crate::pos::Pos;
 const DEFINE_IDENT: &str = "define";
 
 ///
+/// lamda identifier
+///
+const LAMBDA_IDENT: &str = "lambda";
+
+///
 /// All errors associated to the parser
 ///
 #[derive(Debug, PartialEq)]
@@ -54,7 +59,31 @@ pub enum Error{
     ///
     /// Expected expression, got something else
     ///
-    BadExpr
+    BadExpr,
+    ///
+    /// Expected argument list, got somthing else
+    ///
+    BadArgList,
+    ///
+    /// Expected procedure body, got something else
+    ///
+    BadBody
+}
+
+///
+/// A representation of a procedure define expression
+///
+#[derive(Debug, PartialEq)] 
+pub struct ProcExpr{
+    pub params: Vec<String>, 
+    pub body: Box<Node>
+}
+
+impl ProcExpr{
+
+    fn new(params: Vec<String>, body: Node) -> ProcExpr{
+        ProcExpr{params, body: Box::new(body)}
+    }
 }
 
 ///
@@ -62,18 +91,27 @@ pub enum Error{
 ///
 #[derive(Debug, PartialEq)]
 pub enum LiteralValue{
+
     ///
     /// Boolean
     ///
     Boolean(bool),
+
     ///
     /// Number
     ///
     Number(f64),
+
     ///
     /// String
     ///
     String(String),
+    
+    ///
+    /// Procedure
+    ///
+    Proc(ProcExpr),
+    
     ///
     /// Nil
     ///
@@ -127,15 +165,6 @@ pub struct ValueExpr{
 }
 
 ///
-/// A representation of a procedure define expression
-///
-#[derive(Debug, PartialEq)] 
-struct ProcExpr{
-    pub params: Vec<String>, 
-    pub expr: Box<Node>
-}
-
-///
 /// a representation of a define expression
 ///
 #[derive(Debug, PartialEq)] 
@@ -166,7 +195,7 @@ impl DefineValue {
     /// Creates a new procedure define form
     ///
     pub fn new_proc(name: String, params: Vec<String>, expr: Node) -> DefineValue {
-        DefineValue{name, expr: DefineExpr::Proc(ProcExpr{params, expr: Box::new(expr)})}
+        DefineValue{name, expr: DefineExpr::Proc(ProcExpr::new(params, expr))}
     }
 
 }
@@ -338,6 +367,8 @@ impl<'a> Parser<'a> {
                     Node::Ident(i, ipos) => {
                         if i == DEFINE_IDENT {
                             self.parse_define(pos)
+                        }else if i == LAMBDA_IDENT {
+                            self.parse_lambda(pos)
                         }else{
                             self.parse_comb_tail(Node::Ident(i, ipos), pos)
                         }
@@ -389,6 +420,42 @@ impl<'a> Parser<'a> {
                 Ok(Node::Define(DefineValue::new_proc(ident, params, self.parse_expr()?), pos))
             }
             _=> Err(Error::BadIdent)
+        }
+    }
+
+    fn parse_lambda_body(& mut self, params: Vec<String>, pos: Pos) -> Result<Node, Error>{
+        match self.parse_node()? {
+            Node::Comb(comb, body_pos) => {
+                Ok(Node::Literal(LiteralValue::Proc(ProcExpr::new(params, Node::Comb(comb, body_pos))),pos))
+            },
+            _ => {
+                return Err(Error::BadBody);
+            }
+        }
+    }
+    
+    ///
+    /// parses lambda
+    ///
+    fn parse_lambda(& mut self,  pos: Pos) -> Result<Node, Error> {
+        match self.parse_node()? {
+            Node::Comb(mut comb, _) => {
+                let elems = comb.elements.drain(0..);
+                let mut params = Vec::new();
+                for elem in elems {
+                    params.push(match elem {
+                        Node::Ident(i, _) => i,
+                        _ => {
+                            return Err(Error::BadIdent);
+                        }
+                    });
+                }
+                self.parse_lambda_body(params, pos)
+            },
+            Node::Literal(LiteralValue::Nil, _) => {
+                self.parse_lambda_body(Vec::new(), pos)
+            }
+            _ => Err(Error::BadArgList)
         }
     }
 
@@ -451,15 +518,75 @@ mod test{
     }
 
     #[test]
-    fn bad_ident(){
+    fn define_bad_ident(){
         let mut p = Parser::new("(define 12 t)");
         assert_eq!(Error::BadIdent, p.parse().unwrap_err());
     }
 
     #[test]
-    fn bad_expr(){
+    fn define_bad_expr(){
         let mut p = Parser::new("(define abc (define tst t))");
         assert_eq!(Error::BadExpr, p.parse().unwrap_err());
+    }
+
+    #[test]
+    fn lambda(){
+        let mut p = Parser::new("(lambda (a b c) (13 t))");
+        assert_eq!(
+            Node::Literal(
+                LiteralValue::Proc(
+                    ProcExpr::new(
+                        vec![String::from("a"), String::from("b"), String::from("c")],
+                        Node::Comb(
+                            CombValue::new(
+                                vec![Node::Literal(LiteralValue::Number(13.0), Pos::new(0,17)), Node::Literal(LiteralValue::Boolean(true), Pos::new(0,20))],
+                            ),
+                            Pos::new(0,16)
+                        )
+                    )
+                ),Pos::new(0,0)
+            ),
+            p.parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn lambda_no_params(){
+        let mut p = Parser::new("(lambda () (13 t))");
+        assert_eq!(
+            Node::Literal(
+                LiteralValue::Proc(
+                    ProcExpr::new(
+                        Vec::new(),
+                        Node::Comb(
+                            CombValue::new(
+                                vec![Node::Literal(LiteralValue::Number(13.0), Pos::new(0,12)), Node::Literal(LiteralValue::Boolean(true), Pos::new(0,15))],
+                            ),
+                            Pos::new(0,11)
+                        )
+                    )
+                ),Pos::new(0,0)
+            ),
+            p.parse().unwrap()
+        );
+    }
+    
+    #[test]
+    fn lambda_bad_arg_list(){
+        let mut p = Parser::new("(lambda 12 (13 t))");
+        assert_eq!(Error::BadArgList, p.parse().unwrap_err());
+    }
+
+    #[test]
+    fn lambda_bad_ident(){
+        let mut p = Parser::new("(lambda (12) (13 t))");
+        assert_eq!(Error::BadIdent, p.parse().unwrap_err());
+    }
+
+    #[test]
+    fn lambda_bad_body(){
+        let mut p = Parser::new("(lambda (a) 12)");
+        assert_eq!(Error::BadBody, p.parse().unwrap_err());
     }
 
 }

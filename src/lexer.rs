@@ -86,7 +86,12 @@ pub enum Token{
     ///
     /// Quote
     ///
-    Quote
+    Quote,
+    ///
+    /// Signifies the start of a vector expression
+    ///
+    VecStart
+    
 }
 
 
@@ -175,6 +180,10 @@ const FALSE_LITERAL: char = 'f';
 ///
 const QUOTE: char = '\'';
 
+///
+/// Vector start character
+///
+const VECTOR_START: char = '#';
 ///
 /// The lexer
 ///
@@ -536,6 +545,24 @@ impl<'a> Lexer<'a>{
     }
 
     ///
+    /// Lexes either a vector start expression or an identifier
+    ///
+    fn lex_vector_start(&mut self) -> Result<Token, Error> {
+        self.skip_nb();
+         match self.input.peek() {
+            Some(c) => {
+                if c == & EXPR_START {
+                    self.skip_nb();
+                    Ok(Token::VecStart)
+                }else{
+                    self.lex_identifier_with(String::from("#"))
+                }
+            },
+            None => Ok(Token::Ident(String::from("#")))
+        }
+    }
+
+    ///
     /// Lexes a quote
     ///
     fn lex_quote(&mut self) -> Result<Token, Error> {
@@ -584,6 +611,9 @@ impl<'a> Lexer<'a>{
                             },
                             &QUOTE => {
                                 return self.lex_quote();
+                            },
+                            &VECTOR_START => {
+                                return self.lex_vector_start();
                             },
                             _ => {
                                 return self.lex_identifier();
@@ -828,6 +858,15 @@ mod tests{
        let mut lexer = Lexer::new("'abc");
         assert_eq!(Token::Quote, lexer.lex().unwrap());
         assert_eq!(Token::Ident(String::from("abc")), lexer.lex().unwrap());
+    }
+
+    #[test]
+    fn vector_start(){
+        let mut lexer = Lexer::new("# #a #( #");
+        assert_eq!(Token::Ident(String::from("#")), lexer.lex().unwrap());
+        assert_eq!(Token::Ident(String::from("#a")), lexer.lex().unwrap());
+        assert_eq!(Token::VecStart, lexer.lex().unwrap());
+        assert_eq!(Token::Ident(String::from("#")), lexer.lex().unwrap());
     }
     
     #[test]

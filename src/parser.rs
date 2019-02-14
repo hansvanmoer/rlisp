@@ -20,6 +20,8 @@ use crate::lexer::Lexer;
 use crate::lexer::Token;
 use crate::pos::Pos;
 
+use std::collections::LinkedList;
+
 ///
 /// Specifies the parser and associated types
 ///
@@ -33,6 +35,11 @@ const DEFINE_IDENT: &str = "define";
 /// lamda identifier
 ///
 const LAMBDA_IDENT: &str = "lambda";
+
+///
+/// let identifier
+///
+const LET_IDENT: &str = "let";
 
 ///
 /// All errors associated to the parser
@@ -67,7 +74,11 @@ pub enum Error{
     ///
     /// Expected procedure body, got something else
     ///
-    BadBody
+    BadBody,
+    ///
+    /// Expected let var expression, got something else
+    ///
+    BadLetVar
 }
 
 ///
@@ -135,6 +146,10 @@ impl CombValue {
         CombValue{elements: Box::new(elements)}
     }
 
+    pub fn consume(& mut self) -> LinkedList<Node> {
+        self.elements.drain(..).collect::<LinkedList<Node>>()
+    }
+
 }
 
 ///
@@ -200,8 +215,54 @@ impl DefineValue {
 
 }
 
+///
+/// a representation of a let name value pair
+///
+#[derive(Debug, PartialEq)]
+pub struct LetVar{
+    name: String,
+    expr: Node
+}
+
+///
+/// a representation of a let form
+///
+#[derive(Debug, PartialEq)]
+pub struct LetExpr{
+    pub vars: Vec<LetVar>,
+    pub body: Node
+}
+
+#[derive(Debug, PartialEq)]
+pub struct LetValue{
+    pub expr: Box<LetExpr>
+}
+
+impl LetValue{
+
+    fn new(vars: Vec<LetVar>, body: Node) -> LetValue{
+        LetValue{expr: Box::new(LetExpr{vars, body})}
+    }
+    
+}
+
+///
+/// a representation of a vector expression
+///
+#[derive(Debug, PartialEq)]
+pub struct VectorValue{
+    elements: Box<Vec<Node>>
+}
+
+impl VectorValue{
+
+    fn new(elements: Vec<Node>) -> VectorValue{
+        VectorValue{elements: Box::new(elements)}
+    }
+}
+
 /// 
-/// All possible types of syntax nodes
+/// OCAll possible types of syntax nodes
 ///
 #[derive(Debug, PartialEq)]
 pub enum Node{
@@ -221,6 +282,11 @@ pub enum Node{
     Comb(CombValue, Pos),
 
     ///
+    /// A vector
+    ///
+    Vector(VectorValue, Pos),
+    
+    ///
     /// A quote
     ///
     Quote(QuoteValue, Pos),
@@ -228,7 +294,12 @@ pub enum Node{
     ///
     /// Define form
     ///
-    Define(DefineValue, Pos)
+    Define(DefineValue, Pos),
+
+    ///
+    /// Let form
+    ///
+    Let(LetValue, Pos)
 }
 
 ///
@@ -300,6 +371,7 @@ impl<'a> Parser<'a> {
                     Token::End => Ok(ParsedExpr::End),
                     Token::ExprStart => Ok(ParsedExpr::Expr(self.parse_comb()?)),
                     Token::ExprEnd => Ok(ParsedExpr::ExprEnd),
+                    Token::VecStart => Ok(ParsedExpr::Expr(self.parse_vector()?)),
                     Token::Ident(s) => Ok(ParsedExpr::Expr(Node::Ident(s, self.pos))),
                     Token::Number(n) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Number(n), self.pos))),
                     Token::Boolean(b) => Ok(ParsedExpr::Expr(Node::Literal(LiteralValue::Boolean(b), self.pos))),
@@ -308,7 +380,7 @@ impl<'a> Parser<'a> {
                 }
             },
             Err(e) => Err(Error::LexerError(e))
-         }
+        }
     }
 
     ///
@@ -329,12 +401,32 @@ impl<'a> Parser<'a> {
         let node = self.parse_node()?;
         match node {
             Node::Define(_, _) => Err(Error::BadExpr),
+            Node::Let(_,_) => Err(Error::BadExpr),
             _ => Ok(node)
         }
     }
 
+    fn parse_vector(& mut self) -> Result<Node, Error> {
+        let pos = self.pos;
+        let mut elems = Vec::new();
+        loop{
+            match self.parse_node_or_end()? {
+                ParsedExpr::End => {
+                    return Err(Error::BadEnd);
+                },
+                ParsedExpr::ExprEnd => {
+                    return Ok(Node::Vector(VectorValue::new(elems), pos));
+                }
+                ParsedExpr::Expr(node) => {
+                    elems.push(node);
+                }
+            }
+        }
+    }
+    
     fn parse_comb_tail(& mut self, node: Node, pos: Pos) -> Result<Node, Error> {
-        let mut elems = vec!(node);
+        let mut elems = Vec::new();
+        elems.push(node);
         loop {
             match self.parse_node_or_end()? {
                 ParsedExpr::End => {
@@ -369,6 +461,8 @@ impl<'a> Parser<'a> {
                             self.parse_define(pos)
                         }else if i == LAMBDA_IDENT {
                             self.parse_lambda(pos)
+                        }else if i == LET_IDENT {
+                            self.parse_let(pos)
                         }else{
                             self.parse_comb_tail(Node::Ident(i, ipos), pos)
                         }
@@ -394,8 +488,8 @@ impl<'a> Parser<'a> {
         match self.parse_node()? {
             Node::Ident(ident, _) => Ok(Node::Define(DefineValue::new_value(ident, self.parse_expr()?), pos)),
             Node::Comb(mut comb, _) => {
-                let mut param_elems = comb.elements.drain(0..);
-                let ident = match param_elems.next() {
+                let mut elems = comb.consume();
+                let ident = match elems.pop_front() {
                     Some(n) => {
                         match n {
                             Node::Ident(i, _) => i,
@@ -409,15 +503,21 @@ impl<'a> Parser<'a> {
                     }    
                 };
                 let mut params = Vec::new();
-                for param in param_elems {
-                    params.push( match param {
-                        Node::Ident(i, _) => i,
-                        _ => {
-                            return Err(Error::BadIdent)
+                loop{
+                    match elems.pop_front(){
+                        Some(param) => {
+                            params.push( match param {
+                                Node::Ident(i, _) => i,
+                                _ => {
+                                    return Err(Error::BadIdent)
+                                }
+                            });
+                        },
+                        None => {
+                            return Ok(Node::Define(DefineValue::new_proc(ident, params, self.parse_expr()?), pos));
                         }
-                    });
+                    }
                 }
-                Ok(Node::Define(DefineValue::new_proc(ident, params, self.parse_expr()?), pos))
             }
             _=> Err(Error::BadIdent)
         }
@@ -440,20 +540,97 @@ impl<'a> Parser<'a> {
     fn parse_lambda(& mut self,  pos: Pos) -> Result<Node, Error> {
         match self.parse_node()? {
             Node::Comb(mut comb, _) => {
-                let elems = comb.elements.drain(0..);
                 let mut params = Vec::new();
-                for elem in elems {
-                    params.push(match elem {
-                        Node::Ident(i, _) => i,
-                        _ => {
-                            return Err(Error::BadIdent);
+                let mut elems = comb.consume();
+                loop{
+                    match elems.pop_front() {
+                        Some(elem) => {
+                            params.push(match elem {
+                                Node::Ident(i, _) => i,
+                                _ => {
+                                    return Err(Error::BadIdent);
+                                }
+                            });
+                        },
+                        None => {
+                            return self.parse_lambda_body(params, pos);
                         }
-                    });
+                    }
                 }
-                self.parse_lambda_body(params, pos)
             },
             Node::Literal(LiteralValue::Nil, _) => {
                 self.parse_lambda_body(Vec::new(), pos)
+            }
+            _ => Err(Error::BadArgList)
+        }
+    }
+    
+    fn parse_let_var(& mut self, node: Node) -> Result<LetVar, Error> {
+        match node {
+            Node::Comb(mut comb, _) => {
+                let mut elems = comb.consume();
+                match elems.pop_front() {
+                    Some(ident) => {
+                        match ident {
+                            Node::Ident(name, _) => {
+                                match elems.pop_front() {
+                                    Some(expr) => {
+                                        match expr{
+                                            Node::Define(_,_) => Err(Error::BadExpr),
+                                            Node::Let(_,_) => Err(Error::BadExpr),
+                                            _ =>  {
+                                                if elems.len() == 0 {
+                                                    Ok(LetVar{name, expr})
+                                                }else{
+                                                    Err(Error::BadLetVar)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    None => Err(Error::BadLetVar)
+                                }
+                            },
+                            _ => Err(Error::BadIdent) 
+                        }
+                    },
+                    None => Err(Error::BadLetVar)
+                }
+            },
+            _ => Err(Error::BadLetVar)
+        }
+    }
+    
+    fn parse_let_body(& mut self, vars: Vec<LetVar>, pos: Pos) -> Result<Node, Error>{
+        match self.parse_node()? {
+            Node::Comb(comb, body_pos) => {
+                Ok(Node::Let(LetValue::new(vars, Node::Comb(comb, body_pos)), pos))
+            },
+            _ => Err(Error::BadBody)
+        }
+    }
+    
+    ///
+    /// parses let
+    ///
+    fn parse_let(& mut self, pos: Pos) -> Result<Node, Error> {
+        match self.parse_node()? {
+            Node::Comb(mut comb, _) => {
+                let mut elems = comb.consume();
+                let mut vars = Vec::new();
+                loop{
+                    match elems.pop_front() {
+                        Some(elem) => {
+                            vars.push(self.parse_let_var(elem)?);
+                        },
+                        None => {
+                            break;
+                        }
+                    }
+                }
+                self.parse_let_body(vars, pos)
+            },
+            Node::Literal(LiteralValue::Nil, _) => {
+                self.parse_let_body(Vec::new(), pos)
             }
             _ => Err(Error::BadArgList)
         }
@@ -508,6 +685,18 @@ mod test{
         ), Pos::new(0,0)), p.parse().unwrap());
     }
 
+    #[test]
+    fn vector(){
+        let mut p = Parser::new("#(test 12.0 t)");
+        assert_eq!(Node::Vector(VectorValue::new(
+            vec![
+                Node::Ident(String::from("test"), Pos::new(0,2)),
+                Node::Literal(LiteralValue::Number(12.0), Pos::new(0,7)),
+                Node::Literal(LiteralValue::Boolean(true), Pos::new(0,12))
+            ]
+        ), Pos::new(0,0)), p.parse().unwrap());
+    }
+    
     #[test]
     fn define(){
         let mut p = Parser::new("(define abc t)");
